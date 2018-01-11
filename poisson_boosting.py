@@ -4,8 +4,56 @@ from sklearn.tree import DecisionTreeRegressor
 
 
 class GradientBoostingPoissonRegressor:
+    """A Gradient Boosted Regression Tree model for conditionally Poisson
+    distributed data.
 
+    This model estimates a function f for which
 
+        y | X ~ Poisson(lambda = exp(f(X)))
+
+    The function f is estimated as a sum of regression trees by maximizing the
+    log-likelihood of the poisson model.
+
+    Parameters
+    ----------
+
+    n_estimators: int
+        A positive integer.  The number of regression trees to stack when
+        estimating f.
+
+    learning_rate: float
+        A non-negative number which is less than one.  The amount of shrinkage
+        to apply to an estimated regression tree before adding into f.
+
+    max_depth: int
+        Positive integer.  The maximum depth for the estimated regression trees.
+
+    Attributes
+    ----------
+
+    n_estimators: int
+        The number of regression trees to stack when estimating f.
+
+    learning_rate: float
+        The amount of shrinkage to apply to an estimated regression tree before
+        adding into f.
+
+    max_depth: int
+        The maximum depth for the estimated regression trees.
+
+    initial_value_: float
+        The overall mean of y in the training data.  Used as an initial
+        prediction, all subsequent regression trees predictions are added to
+        this baseline value.
+
+    estimators_: list of sklean.tree objects.
+        Sequence of estimated regression trees.
+
+    terminal_node_estimates_: list of dict(int: float)
+        Predictions that apply in the terminal nodes (leaves) of the estimated
+        regression trees.  These prediction are summed into the final
+        predictions of the gradient boosted model.
+    """
     def __init__(self, 
                  n_estimators=100,
                  learning_rate=0.001,
@@ -15,34 +63,30 @@ class GradientBoostingPoissonRegressor:
         self.learning_rate = learning_rate
         self.max_depth = max_depth
         self.weak_learner = DecisionTreeRegressor(max_depth=self.max_depth)
-        
-        self.initial_value = None
-        self.estimators = []
-        self.terminal_node_estimates = []
+        # Estimated quantities.
+        self.initial_value_ = None
+        self.estimators_ = []
+        self.terminal_node_estimates_ = []
 
     def fit(self, X, y):
-        self.initial_value = self._initial_value(y)
-        working_prediction = np.repeat(self.initial_value, y.shape[0])
+        self.initial_value_ = self._initial_value(y)
+        working_prediction = np.repeat(self.initial_value_, y.shape[0])
         working_response = self._gradient(y, working_prediction)
-
         for idx in range(self.n_estimators):
-
             tree = clone(self.weak_learner).fit(X, working_response)
             terminal_node_estimates = self._terminal_node_estimates(
                 X, y, working_prediction, tree)
             prediction_update = self._prediction_update(
                 X, tree, terminal_node_estimates)
-
             working_prediction += self.learning_rate * prediction_update
             working_response = self._gradient(y, working_prediction)
-
-            self.estimators.append(tree)
-            self.terminal_node_estimates.append(terminal_node_estimates)
+            self.estimators_.append(tree)
+            self.terminal_node_estimates_.append(terminal_node_estimates)
         return self
 
     def predict(self, X):
-        y_hat = np.repeat(self.initial_value, X.shape[0])
-        estimator_data = zip(self.estimators, self.terminal_node_estimates)
+        y_hat = np.repeat(self.initial_value_, X.shape[0])
+        estimator_data = zip(self.estimators_, self.terminal_node_estimates_)
         for tree, tn_estimates in estimator_data:
             y_hat += self.learning_rate * self._prediction_update(X, tree, tn_estimates)
         return np.exp(y_hat)
@@ -55,7 +99,6 @@ class GradientBoostingPoissonRegressor:
 
     def _terminal_node_estimates(self, X, y, y_hat, tree):
         exp_y_hat = np.exp(y_hat)
-
         estimates = {}
         terminal_node_assignments = tree.apply(X)
         terminal_node_idxs = np.unique(terminal_node_assignments)
